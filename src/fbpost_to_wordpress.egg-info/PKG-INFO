@@ -1,0 +1,60 @@
+Metadata-Version: 2.4
+Name: fbpost-to-wordpress
+Version: 0.1.0
+Summary: Scrape public Facebook page posts, redact with OpenRouter, and publish to WordPress.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: playwright>=1.54.0
+Requires-Dist: pydantic>=2.8.0
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: python-slugify>=8.0.4
+Requires-Dist: rich>=13.7.1
+Requires-Dist: tenacity>=9.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.0; extra == "dev"
+Requires-Dist: respx>=0.21.1; extra == "dev"
+
+# fbpost-to-wordpress
+
+CLI Python untuk mengambil posting dari public Facebook page, merapikannya dengan OpenRouter, lalu mengirimnya ke WordPress sebagai `draft`.
+
+## Setup
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e .[dev]
+python -m playwright install chromium
+Copy-Item .env.example .env
+```
+
+## Konfigurasi `.env`
+
+Isi file `.env` dengan:
+
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `WP_BASE_URL`
+- `WP_USERNAME`
+- `WP_APP_PASSWORD`
+
+## Menjalankan Aplikasi
+
+Jalankan mode normal:
+
+```powershell
+python main.py
+```
+
+Jalankan `dry-run` tanpa kirim ke WordPress:
+
+```powershell
+python main.py --dry-run
+```
+
+## Menjalankan Test
+
+```powershell
+python -m pytest -q -p no:cacheprovider
+```
