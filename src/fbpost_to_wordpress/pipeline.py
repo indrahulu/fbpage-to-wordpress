@@ -31,6 +31,15 @@ class PostPipeline:
     def run(self, page_url: str, count: int, skip: int, dry_run: bool) -> None:
         self.console.print(f"[cyan]Discovering posts from {page_url} (count={count}, skip={skip})[/cyan]")
         discovered_posts = self.scraper.discover_posts(page_url=page_url, count=count, skip=skip)
+        if not discovered_posts:
+            self.console.print(
+                f"[yellow]No posts available for requested skip={skip}, count={count}. Nothing to process.[/yellow]"
+            )
+            return
+        if len(discovered_posts) < count:
+            self.console.print(
+                f"[yellow]Only {len(discovered_posts)} post(s) available after skip={skip}; requested {count}.[/yellow]"
+            )
         self.console.print(f"[cyan]Discovered {len(discovered_posts)} post(s) to process[/cyan]")
         for index, discovered in enumerate(discovered_posts, start=1):
             self.console.print(f"[cyan]Processing post {index}/{len(discovered_posts)}: {discovered.post_id}[/cyan]")

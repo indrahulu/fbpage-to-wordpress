@@ -131,3 +131,47 @@ def test_facebook_scraper_prefers_largest_image_variant_per_media_object() -> No
 def test_image_extension_from_url_normalizes_suffix() -> None:
     assert image_extension_from_url("https://cdn.example.com/photo.png?x=1") == "png"
     assert image_extension_from_url("https://cdn.example.com/photo") == "jpg"
+
+
+@respx.mock
+def test_facebook_scraper_discover_posts_returns_partial_results_without_error() -> None:
+    respx.post("https://api.apify.com/v2/acts/apify~facebook-posts-scraper/run-sync-get-dataset-items").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "postId": "123",
+                    "url": "https://www.facebook.com/page/posts/123",
+                    "time": "2026-01-20T13:00:05.000Z",
+                    "text": "isi post",
+                }
+            ],
+        )
+    )
+
+    scraper = FacebookScraper(token="apify-token")
+    posts = scraper.discover_posts("https://www.facebook.com/page", count=2, skip=0)
+
+    assert [post.post_id for post in posts] == ["123"]
+
+
+@respx.mock
+def test_facebook_scraper_discover_posts_returns_empty_when_skip_exceeds_items() -> None:
+    respx.post("https://api.apify.com/v2/acts/apify~facebook-posts-scraper/run-sync-get-dataset-items").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "postId": "123",
+                    "url": "https://www.facebook.com/page/posts/123",
+                    "time": "2026-01-20T13:00:05.000Z",
+                    "text": "isi post",
+                }
+            ],
+        )
+    )
+
+    scraper = FacebookScraper(token="apify-token")
+    posts = scraper.discover_posts("https://www.facebook.com/page", count=1, skip=2)
+
+    assert posts == []

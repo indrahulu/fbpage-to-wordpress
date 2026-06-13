@@ -23,8 +23,8 @@ class FacebookScraper:
 
     def discover_posts(self, page_url: str, count: int, skip: int) -> list[DiscoveredPost]:
         items = self._fetch_posts(page_url=page_url, results_limit=count + skip)
-        if len(items) < count + skip:
-            raise RuntimeError(f"Only discovered {len(items)} posts, but need {count + skip} for skip={skip}, count={count}.")
+        if len(items) <= skip:
+            return []
         return [self._to_discovered_post(page_url, item) for item in items[skip : skip + count]]
 
     def scrape_post(self, discovered: DiscoveredPost) -> ScrapedPost:

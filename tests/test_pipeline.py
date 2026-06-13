@@ -315,3 +315,16 @@ def test_pipeline_run_post_folder_forces_requested_stage(workdir: Path) -> None:
     assert status["stage"] == "published"
     assert status["wordpress_post_id"] == 321
     assert wordpress.post_creates == 1
+
+
+def test_pipeline_run_with_no_discovered_posts_exits_cleanly(workdir: Path) -> None:
+    class EmptyScraper(FakeScraper):
+        def discover_posts(self, page_url: str, count: int, skip: int):
+            return []
+
+    storage = PostStorage(workdir)
+    pipeline = PostPipeline(storage, EmptyScraper(), FakeOpenRouter(), FakeWordPress())
+
+    pipeline.run("https://facebook.com/page", count=2, skip=5, dry_run=False)
+
+    assert list(workdir.iterdir()) == []
