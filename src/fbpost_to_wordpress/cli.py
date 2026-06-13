@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from rich.console import Console
@@ -76,6 +77,9 @@ def main() -> int:
         return 0
 
     page_url = args.page_url or Prompt.ask("Facebook page URL")
+    if not re.match(r"^https?://([\w-]+\.)*facebook\.com(/.*)?$", page_url.strip()):
+        console.print("[red]URL tidak valid: harus berupa URL Facebook (facebook.com atau subdomain-nya).[/red]")
+        return 1
     count = args.count if args.count is not None else IntPrompt.ask("How many posts to fetch", default=1)
     skip = args.skip if args.skip is not None else IntPrompt.ask("How many latest posts to skip", default=0)
 
