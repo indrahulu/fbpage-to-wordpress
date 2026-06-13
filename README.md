@@ -109,13 +109,13 @@ python main.py
 Dengan argumen:
 
 ```powershell
-python main.py --page-url "https://web.facebook.com/sinodebnkpofficial" --count 1 --skip 0
+python main.py --page-url "https://example.com" --count 1 --skip 0
 ```
 
 Dry-run:
 
 ```powershell
-python main.py --dry-run --page-url "https://web.facebook.com/sinodebnkpofficial" --count 1 --skip 0
+python main.py --dry-run --page-url "https://example.com" --count 1 --skip 0
 ```
 
 Perilaku `--dry-run`:
