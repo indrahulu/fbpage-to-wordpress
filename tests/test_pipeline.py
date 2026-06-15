@@ -2,7 +2,14 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fbpost_to_wordpress.models import DiscoveredPost, RedactedContent, Stage, WordPressMedia, WordPressPostRef
+from fbpost_to_wordpress.models import (
+    DiscoveredPost,
+    FeaturedImageCandidate,
+    RedactedContent,
+    Stage,
+    WordPressMedia,
+    WordPressPostRef,
+)
 from fbpost_to_wordpress.pipeline import PostPipeline
 from fbpost_to_wordpress.storage import PostStorage
 
@@ -36,16 +43,17 @@ class FakeScraper:
 
 class FakeOpenRouter:
     def __init__(self) -> None:
+        self.model = "test-model"
         self.featured_image_calls = 0
 
     def redact(self, content: str) -> RedactedContent:
         return RedactedContent(title="Judul", body="Isi", raw_markdown="# Judul\n\nIsi\n")
 
-    def select_featured_image(self, content: str, image_paths: list[Path]):
+    def select_featured_image(self, content: str, candidates: list[FeaturedImageCandidate]):
         from fbpost_to_wordpress.models import FeaturedImageSelection
 
         self.featured_image_calls += 1
-        return FeaturedImageSelection(selected_image=image_paths[-1].name, reason="Paling bagus")
+        return FeaturedImageSelection(selected_image=candidates[-1].filename, reason="Paling bagus")
 
 
 class FakeWordPress:
@@ -203,7 +211,7 @@ def test_pipeline_without_wordpress_stops_after_redact(workdir: Path) -> None:
     assert (folder / "content-redacted.md").exists()
 
 
-def test_pipeline_selects_featured_image_for_multiple_images(workdir: Path) -> None:
+def test_pipeline_selects_featured_image_for_multiple_images(workdir: Path, capsys) -> None:
     class MultiImageScraper(FakeScraper):
         def scrape_post(self, discovered: DiscoveredPost):
             from fbpost_to_wordpress.models import ScrapedPost
@@ -229,11 +237,56 @@ def test_pipeline_selects_featured_image_for_multiple_images(workdir: Path) -> N
     folder = next(workdir.iterdir())
     selection = json.loads((folder / "featured-image.json").read_text(encoding="utf-8"))
     assert selection["selected_image"] == "image-2.jpg"
+    assert selection["source"] == "ai"
+    assert selection["model"] == "test-model"
     assert openrouter.featured_image_calls == 1
     assert wordpress.featured_media_ids == [100]
+    output = capsys.readouterr().out
+    assert "Featured image (from AI response)" in output
+    assert "reason=Paling bagus" in output
 
 
-def test_pipeline_saves_fallback_featured_image_when_selection_fails(workdir: Path) -> None:
+def test_pipeline_uploads_all_images_before_ai_selection(workdir: Path) -> None:
+    events: list[str] = []
+
+    class MultiImageScraper(FakeScraper):
+        def scrape_post(self, discovered: DiscoveredPost):
+            from fbpost_to_wordpress.models import ScrapedPost
+
+            return ScrapedPost(
+                post_id=discovered.post_id,
+                post_url=discovered.post_url,
+                page_url=discovered.page_url,
+                content="konten asli",
+                published_at=discovered.published_at,
+                images=[
+                    "https://example.com/image-1.jpg",
+                    "https://example.com/image-2.jpg",
+                ],
+            )
+
+    class OrderedWordPress(FakeWordPress):
+        def upload_media(self, image_path: Path) -> int:
+            events.append(f"upload:{image_path.name}")
+            return super().upload_media(image_path)
+
+    class OrderedOpenRouter(FakeOpenRouter):
+        def select_featured_image(self, content: str, candidates: list[FeaturedImageCandidate]):
+            events.append("ai:select")
+            return super().select_featured_image(content, candidates)
+
+    storage = PostStorage(workdir)
+    pipeline = PostPipeline(storage, MultiImageScraper(), OrderedOpenRouter(), OrderedWordPress())
+    pipeline.run("https://facebook.com/page", count=1, skip=0, dry_run=False)
+
+    assert events == [
+        "upload:image-1.jpg",
+        "upload:image-2.jpg",
+        "ai:select",
+    ]
+
+
+def test_pipeline_saves_fallback_featured_image_when_selection_fails(workdir: Path, capsys) -> None:
     class MultiImageScraper(FakeScraper):
         def scrape_post(self, discovered: DiscoveredPost):
             from fbpost_to_wordpress.models import ScrapedPost
@@ -251,7 +304,7 @@ def test_pipeline_saves_fallback_featured_image_when_selection_fails(workdir: Pa
             )
 
     class FailingOpenRouter(FakeOpenRouter):
-        def select_featured_image(self, content: str, image_paths: list[Path]):
+        def select_featured_image(self, content: str, candidates: list[FeaturedImageCandidate]):
             raise ValueError("rate limited")
 
     storage = PostStorage(workdir)
@@ -262,6 +315,12 @@ def test_pipeline_saves_fallback_featured_image_when_selection_fails(workdir: Pa
     selection = json.loads((folder / "featured-image.json").read_text(encoding="utf-8"))
     assert selection["selected_image"] == "image-1.jpg"
     assert "Fallback to first image" in selection["reason"]
+    assert selection["source"] == "fallback"
+    assert selection["model"] == "test-model"
+    output = capsys.readouterr().out
+    assert "Featured image (from fallback)" in output
+    assert "automatic selection failed" in output
+    assert "rate limited" in output
 
 
 def test_pipeline_updates_existing_wordpress_draft_with_same_source_id(workdir: Path) -> None:

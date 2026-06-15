@@ -62,8 +62,6 @@ def test_openrouter_loads_prompt_from_file(workdir) -> None:
 def test_openrouter_select_featured_image_parses_fenced_json(workdir) -> None:
     featured_prompt = workdir / "prompt-featured-image.md"
     featured_prompt.write_text("Pilih featured image", encoding="utf-8")
-    image_path = workdir / "image-1.jpg"
-    image_path.write_bytes(b"fake-image")
     route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
@@ -71,7 +69,11 @@ def test_openrouter_select_featured_image_parses_fenced_json(workdir) -> None:
                 "choices": [
                     {
                         "message": {
-                            "content": "```json\n{\"selected_image\":\"image-1.jpg\",\"reason\":\"Paling jelas.\"}\n```"
+                            "content": (
+                                "```json\n"
+                                "{\"selected_image\":\"image-1.jpg\",\"selected_url\":\"https://example.com/uploads/image-1.jpg\",\"reason\":\"Paling jelas.\"}\n"
+                                "```"
+                            )
                         }
                     }
                 ]
@@ -84,21 +86,28 @@ def test_openrouter_select_featured_image_parses_fenced_json(workdir) -> None:
         model="test-model",
         featured_image_prompt_path=featured_prompt,
     )
-    result = client.select_featured_image("isi post", [image_path])
+    from fbpost_to_wordpress.models import FeaturedImageCandidate
+
+    result = client.select_featured_image(
+        "isi post",
+        [FeaturedImageCandidate(filename="image-1.jpg", public_url="https://example.com/uploads/image-1.jpg")],
+    )
 
     assert route.called
     request_payload = json.loads(route.calls[0].request.content.decode("utf-8"))
-    assert request_payload["messages"][1]["content"][1]["text"] == "Filename: image-1.jpg"
+    assert "image-1.jpg" in request_payload["messages"][1]["content"][0]["text"]
+    assert "https://example.com/uploads/image-1.jpg" in request_payload["messages"][1]["content"][0]["text"]
     assert result.selected_image == "image-1.jpg"
+    assert result.selected_url == "https://example.com/uploads/image-1.jpg"
     assert result.reason == "Paling jelas."
+    assert result.source == "ai"
+    assert result.model == "test-model"
 
 
 @respx.mock
 def test_openrouter_select_featured_image_rejects_unknown_filename(workdir: Path) -> None:
     featured_prompt = workdir / "prompt-featured-image.md"
     featured_prompt.write_text("Pilih featured image", encoding="utf-8")
-    image_path = workdir / "image-1.jpg"
-    image_path.write_bytes(b"fake-image")
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
@@ -119,5 +128,10 @@ def test_openrouter_select_featured_image_rejects_unknown_filename(workdir: Path
         model="test-model",
         featured_image_prompt_path=featured_prompt,
     )
+    from fbpost_to_wordpress.models import FeaturedImageCandidate
+
     with pytest.raises(ValueError):
-        client.select_featured_image("isi post", [image_path])
+        client.select_featured_image(
+            "isi post",
+            [FeaturedImageCandidate(filename="image-1.jpg", public_url="https://example.com/uploads/image-1.jpg")],
+        )

@@ -6,7 +6,7 @@ from datetime import datetime
 from rich.console import Console
 
 from fbpost_to_wordpress.facebook import FacebookScraper, image_extension_from_url
-from fbpost_to_wordpress.models import DiscoveredPost, FeaturedImageSelection, Stage
+from fbpost_to_wordpress.models import DiscoveredPost, FeaturedImageCandidate, FeaturedImageSelection, Stage
 from fbpost_to_wordpress.openrouter import OpenRouterClient
 from fbpost_to_wordpress.storage import PostStorage
 from fbpost_to_wordpress.utils import parse_redacted_markdown
@@ -119,7 +119,6 @@ class PostPipeline:
         record = self.storage.read_record(folder)
         redacted = parse_redacted_markdown((folder / "content-redacted.md").read_text(encoding="utf-8"))
         images = self.storage.list_local_images(folder)
-        featured_image_name = self._resolve_featured_image_name(folder, images)
         existing_post = self.wordpress_client.find_post_by_source_id(record.post_id)
         if existing_post is not None and existing_post.status == "publish":
             self.console.print(
@@ -136,6 +135,7 @@ class PostPipeline:
         media_map = {path.name: self.wordpress_client.upload_media(path) for path in images}
         media_items = [media_map[path.name] for path in images]
         media_ids = [media.id for media in media_items]
+        featured_image_name = self._resolve_featured_image_name(folder, images, media_map)
         featured_media_id = media_map.get(featured_image_name).id if featured_image_name and featured_image_name in media_map else None
         if featured_media_id is not None:
             self.console.print(f"[blue]Using {featured_image_name} as featured image[/blue]")
@@ -167,37 +167,107 @@ class PostPipeline:
             wordpress_media_ids=media_ids,
         )
 
-    def _resolve_featured_image_name(self, folder: Path, images: list[Path]) -> str | None:
+    def _resolve_featured_image_name(
+        self,
+        folder: Path,
+        images: list[Path],
+        media_map: dict[str, "WordPressMedia"],
+    ) -> str | None:
         if not images:
             return None
         if len(images) == 1:
-            return images[0].name
+            selected = FeaturedImageSelection(
+                selected_image=images[0].name,
+                reason="Only one image available, so it is used as the featured image.",
+                selected_url=media_map[images[0].name].source_url if images[0].name in media_map else None,
+                source="fallback",
+                model=getattr(self.openrouter_client, "model", None),
+            )
+            self._print_featured_image_decision(selected, source="fallback")
+            return selected.selected_image
 
         existing = self.storage.read_featured_image_selection(folder)
         if existing is not None:
-            self.console.print(f"[blue]Reusing featured image selection: {existing.selected_image}[/blue]")
+            source = existing.source or self._infer_featured_image_source(existing.reason)
+            self._print_featured_image_decision(existing, source=source, reused=True)
             return existing.selected_image
 
         if self.openrouter_client is None:
-            return images[0].name
+            fallback = FeaturedImageSelection(
+                selected_image=images[0].name,
+                reason="OpenRouter config is incomplete, so the first image is used as the featured image.",
+                selected_url=media_map[images[0].name].source_url if images[0].name in media_map else None,
+                source="fallback",
+                model=None,
+            )
+            self._print_featured_image_decision(fallback, source="fallback")
+            return fallback.selected_image
 
         self.console.print(f"[blue]Selecting featured image from {len(images)} candidate(s)[/blue]")
         content = (folder / "content.md").read_text(encoding="utf-8")
+        candidates = [
+            FeaturedImageCandidate(filename=path.name, public_url=media_map[path.name].source_url)
+            for path in images
+            if path.name in media_map
+        ]
         try:
-            selection = self.openrouter_client.select_featured_image(content, images)
+            selection = self.openrouter_client.select_featured_image(content, candidates)
+            selection = self._annotate_featured_image_selection(selection, source="ai")
             self.storage.write_featured_image_selection(self.storage.read_record(folder), selection)
-            self.console.print(f"[green]Featured image selected: {selection.selected_image}[/green]")
+            self._print_featured_image_decision(selection, source="ai")
             return selection.selected_image
         except Exception as exc:
             fallback = images[0].name
+            fallback_selection = FeaturedImageSelection(
+                selected_image=fallback,
+                reason=f"Fallback to first image because automatic selection failed: {exc}",
+                selected_url=media_map[fallback].source_url if fallback in media_map else None,
+                source="fallback",
+                model=getattr(self.openrouter_client, "model", None),
+            )
             self.storage.write_featured_image_selection(
                 self.storage.read_record(folder),
-                FeaturedImageSelection(
-                    selected_image=fallback,
-                    reason=f"Fallback to first image because automatic selection failed: {exc}",
-                ),
+                fallback_selection,
             )
-            self.console.print(
-                f"[yellow]Featured image selection failed: {exc}. Falling back to {fallback}[/yellow]"
+            self.console.print(f"[yellow]Featured image selection failed: {exc}. Falling back to {fallback}[/yellow]")
+            self._print_featured_image_decision(
+                fallback_selection,
+                source="fallback",
             )
             return fallback
+
+    def _annotate_featured_image_selection(self, selection: FeaturedImageSelection, source: str) -> FeaturedImageSelection:
+        model = getattr(self.openrouter_client, "model", None)
+        if selection.source == source and selection.model == model:
+            return selection
+        return FeaturedImageSelection(
+            selected_image=selection.selected_image,
+            reason=selection.reason,
+            selected_url=selection.selected_url,
+            source=source,
+            model=model,
+        )
+
+    def _print_featured_image_decision(
+        self,
+        selection: FeaturedImageSelection,
+        source: str,
+        reused: bool = False,
+    ) -> None:
+        source_label = {
+            "ai": "AI response",
+            "fallback": "fallback",
+        }.get(source, source)
+        reused_label = "reused " if reused else ""
+        details = [f"selected={selection.selected_image}"]
+        if selection.selected_url:
+            details.append(f"url={selection.selected_url}")
+        details.append(f"reason={selection.reason}")
+        self.console.print(
+            f"[green]Featured image ({reused_label}from {source_label}): " + "; ".join(details) + "[/green]"
+        )
+
+    def _infer_featured_image_source(self, reason: str) -> str:
+        if reason.lower().startswith("fallback to"):
+            return "fallback"
+        return "ai"

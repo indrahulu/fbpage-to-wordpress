@@ -10,7 +10,8 @@ Saat publish ke WordPress:
 - kategori post di-set ke `Berita`
 - tanggal post mengikuti tanggal Facebook dalam timezone `Asia/Jakarta`
 - semua gambar post ditambahkan di bagian akhir artikel sebagai galeri Gutenberg
-- jika ada lebih dari satu gambar, AI memilih featured image terbaik dan hasilnya disimpan ke `featured-image.json`
+- semua gambar di-upload ke WordPress dulu, lalu AI memilih featured image dari daftar `public URL`
+- hasil pilihan featured image beserta alasan dan metadata sumbernya disimpan ke `featured-image.json`
 
 Post yang dibuat aplikasi juga diberi identitas kuat internal di konten WordPress. Saat rerun, aplikasi hanya mengenali post WordPress yang punya identitas ini. Post lama lain tanpa identitas tersebut diabaikan dan tidak dianggap duplikat.
 

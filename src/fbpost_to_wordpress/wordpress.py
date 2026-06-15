@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import mimetypes
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +16,11 @@ from fbpost_to_wordpress.utils import ensure_utc
 
 
 JAKARTA_TZ = timezone(timedelta(hours=7), name="Asia/Jakarta")
+_HASHTAG_ONLY_TOKEN_RE = re.compile(r"#[^\s#]+")
+_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+_STRONG_RE = re.compile(r"\*\*(.+?)\*\*")
+_EM_RE = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 class WordPressClient:
@@ -156,7 +163,7 @@ class WordPressClient:
         source_post_url: str,
     ) -> str:
         lines = [self._build_source_marker(source_post_id, source_post_url)]
-        lines.extend(f"<p>{line}</p>" for line in body_markdown.splitlines() if line.strip())
+        lines.extend(self._build_body_blocks(body_markdown))
         if media_items:
             gallery_parts = ['<!-- wp:gallery {"randomOrder":true,"linkTo":"lightbox"} -->']
             gallery_parts.append('<figure class="wp-block-gallery has-nested-images columns-default is-cropped">')
@@ -177,6 +184,71 @@ class WordPressClient:
             gallery_parts.append("<!-- /wp:gallery -->")
             lines.append("\n".join(gallery_parts).strip())
         return "\n".join(lines)
+
+    def _build_body_blocks(self, body_markdown: str) -> list[str]:
+        cleaned_body = self._strip_trailing_hashtags(body_markdown)
+        blocks: list[str] = []
+        for chunk in re.split(r"\n\s*\n+", cleaned_body.strip()):
+            block = chunk.strip()
+            if not block:
+                continue
+            heading_match = re.match(r"^(#{1,6})\s+(.+)$", block)
+            if heading_match:
+                level = len(heading_match.group(1))
+                text = heading_match.group(2).strip()
+                if text:
+                    blocks.append(self._serialize_heading_block(level, text))
+                continue
+            text = " ".join(line.strip() for line in block.splitlines() if line.strip())
+            if text:
+                blocks.append(self._serialize_paragraph_block(text))
+        return blocks
+
+    def _serialize_paragraph_block(self, text: str) -> str:
+        rendered = self._render_inline_markdown(text)
+        return f"<!-- wp:paragraph --><p>{rendered}</p><!-- /wp:paragraph -->"
+
+    def _serialize_heading_block(self, level: int, text: str) -> str:
+        heading_level = max(1, min(level, 6))
+        escaped = self._render_inline_markdown(text)
+        attrs = json.dumps({"level": heading_level}, separators=(",", ":"))
+        return f"<!-- wp:heading {attrs} --><h{heading_level}>{escaped}</h{heading_level}><!-- /wp:heading -->"
+
+    def _render_inline_markdown(self, text: str) -> str:
+        rendered = html.escape(text, quote=False)
+        rendered = _CODE_SPAN_RE.sub(lambda match: f"<code>{html.escape(match.group(1), quote=False)}</code>", rendered)
+        rendered = _STRONG_RE.sub(lambda match: f"<strong>{match.group(1)}</strong>", rendered)
+        rendered = _EM_RE.sub(lambda match: f"<em>{match.group(1)}</em>", rendered)
+        rendered = _LINK_RE.sub(
+            lambda match: (
+                f'<a href="{html.escape(match.group(2), quote=True)}">'
+                f"{match.group(1)}</a>"
+            ),
+            rendered,
+        )
+        return rendered
+
+    def _strip_trailing_hashtags(self, body_markdown: str) -> str:
+        lines = body_markdown.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        while lines and self._is_hashtag_only_line(lines[-1]):
+            lines.pop()
+            while lines and not lines[-1].strip():
+                lines.pop()
+        return "\n".join(lines).strip()
+
+    def _is_hashtag_only_line(self, line: str) -> bool:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("<!--") or stripped.startswith("# "):
+            return False
+        if not stripped.startswith("#"):
+            return False
+        tokens = _HASHTAG_ONLY_TOKEN_RE.findall(stripped)
+        if not tokens:
+            return False
+        remainder = _HASHTAG_ONLY_TOKEN_RE.sub("", stripped)
+        return not remainder.strip(" \t,.;:!/?-–—()[]{}\"'")
 
     def _to_jakarta_datetime(self, published_at: datetime) -> datetime:
         if published_at.tzinfo is None:

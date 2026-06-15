@@ -54,7 +54,11 @@ def test_wordpress_create_post_sends_title_body_and_featured_media() -> None:
     client = WordPressClient("https://example.com", "admin", "secret")
 
     post_id = client.create_post(
-        RedactedContent(title="Judul", body="Paragraf satu\n\nParagraf dua", raw_markdown="# Judul\n\nParagraf"),
+        RedactedContent(
+            title="Judul",
+            body="## Pendahuluan\n\nParagraf **satu** lanjutan\n\nParagraf dua\n\n#akhir1\n#akhir2",
+            raw_markdown="# Judul\n\n## Pendahuluan\n\nParagraf",
+        ),
         media_items=[
             WordPressMedia(id=88, source_url="https://example.com/uploads/image-1.jpg"),
             WordPressMedia(id=99, source_url="https://example.com/uploads/image-2.jpg"),
@@ -73,9 +77,42 @@ def test_wordpress_create_post_sends_title_body_and_featured_media() -> None:
     assert '"date":"2026-06-09T11:30:00+07:00"' in payload
     assert '"date_gmt":"2026-06-09T04:30:00"' in payload
     assert 'fbpost-to-wordpress:{\\"source_post_id\\":\\"123\\",\\"source_post_url\\":\\"https://facebook.com/posts/123\\"}' in payload
+    assert "<!-- wp:heading {\\\"level\\\":2} -->" in payload
+    assert "<!-- wp:paragraph -->" in payload
+    assert "<strong>satu</strong>" in payload
+    assert "**satu**" not in payload
     assert "wp:gallery" in payload
     assert 'src=\\"https://example.com/uploads/image-1.jpg\\"' in payload
     assert 'src=\\"https://example.com/uploads/image-2.jpg\\"' in payload
+    assert "#akhir1" not in payload
+    assert "#akhir2" not in payload
+
+
+@respx.mock
+def test_wordpress_create_post_preserves_mid_article_hashtags_but_removes_trailing_ones() -> None:
+    respx.get("https://example.com/wp-json/wp/v2/categories").mock(
+        return_value=httpx.Response(200, json=[{"id": 12, "name": "Berita", "slug": "berita"}])
+    )
+    route = respx.post("https://example.com/wp-json/wp/v2/posts").mock(
+        return_value=httpx.Response(201, json={"id": 322})
+    )
+    client = WordPressClient("https://example.com", "admin", "secret")
+
+    client.create_post(
+        RedactedContent(
+            title="Judul",
+            body="Paragraf pembuka\n\n#tag-di-tengah\n\nParagraf penutup\n\n#akhir1\n#akhir2\n",
+            raw_markdown="# Judul\n\nParagraf",
+        ),
+        media_items=[],
+        source_post_id="123",
+        source_post_url="https://facebook.com/posts/123",
+    )
+
+    payload = route.calls[0].request.read().decode("utf-8")
+    assert "#tag-di-tengah" in payload
+    assert "#akhir1" not in payload
+    assert "#akhir2" not in payload
 
 
 @respx.mock
@@ -147,3 +184,5 @@ def test_wordpress_update_post_uses_existing_post_endpoint() -> None:
     )
     assert post_id == 321
     assert route.called
+    payload = route.calls[0].request.read().decode("utf-8")
+    assert "<!-- wp:paragraph -->" in payload

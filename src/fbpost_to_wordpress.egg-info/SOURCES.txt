@@ -15,8 +15,9 @@ src/fbpost_to_wordpress.egg-info/SOURCES.txt
 src/fbpost_to_wordpress.egg-info/dependency_links.txt
 src/fbpost_to_wordpress.egg-info/requires.txt
 src/fbpost_to_wordpress.egg-info/top_level.txt
+tests/test_cli.py
 tests/test_config.py
-tests/test_facebook_smoke.py
+tests/test_facebook.py
 tests/test_openrouter.py
 tests/test_pipeline.py
 tests/test_redacted_parser.py

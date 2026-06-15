@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from fbpost_to_wordpress.models import FeaturedImageSelection, RedactedContent
+from fbpost_to_wordpress.models import FeaturedImageCandidate, FeaturedImageSelection, RedactedContent
 from fbpost_to_wordpress.utils import parse_redacted_markdown
 
 
@@ -48,32 +47,28 @@ class OpenRouterClient:
         return parse_redacted_markdown(markdown)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
-    def select_featured_image(self, content: str, image_paths: list[Path]) -> FeaturedImageSelection:
-        if not image_paths:
+    def select_featured_image(self, content: str, candidates: list[FeaturedImageCandidate]) -> FeaturedImageSelection:
+        if not candidates:
             raise ValueError("At least one image is required to select a featured image.")
 
         prompt = self.load_prompt(self.featured_image_prompt_path)
+        candidate_lines = "\n".join(f"- {candidate.filename}: {candidate.public_url}" for candidate in candidates)
         message_content = [
             {
                 "type": "text",
                 "text": (
                     f"{prompt}\n\n"
                     f"Konten post:\n---\n{content.strip()}\n---\n\n"
-                    f"Pilih hanya dari file berikut: {', '.join(path.name for path in image_paths)}\n"
-                    "Kembalikan JSON saja."
+                    f"Kandidat gambar:\n{candidate_lines}\n\n"
+                    "Pilih satu kandidat dan kembalikan JSON saja. "
+                    "Gunakan format berikut:\n"
+                    '{ "selected_image": "image-x.jpg", "selected_url": "https://...", "reason": "..." }\n'
+                    "selected_image wajib diisi dengan filename persis dari daftar. "
+                    "selected_url wajib diisi dengan public URL yang cocok untuk kandidat terpilih. "
+                    "Jika memilih berdasarkan URL, selected_image dan selected_url harus menunjuk ke kandidat yang sama."
                 ),
             }
         ]
-        for path in image_paths:
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-            mime_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-            message_content.append({"type": "text", "text": f"Filename: {path.name}"})
-            message_content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
-                }
-            )
 
         payload = {
             "model": self.model,
@@ -89,13 +84,25 @@ class OpenRouterClient:
         raw_content = data["choices"][0]["message"]["content"]
         cleaned = self._strip_code_fences(raw_content)
         parsed = json.loads(cleaned)
+        selected_image = str(parsed.get("selected_image", "")).strip()
+        selected_url_raw = parsed.get("selected_url")
+        selected_url = str(selected_url_raw).strip() if selected_url_raw is not None else None
+        reason = str(parsed["reason"]).strip()
+        candidates_by_name = {candidate.filename: candidate for candidate in candidates}
+        if selected_image not in candidates_by_name:
+            raise ValueError(f"Selected image is not in local candidates: {selected_image}")
+        if selected_url is None:
+            selected_url = candidates_by_name[selected_image].public_url
         selection = FeaturedImageSelection(
-            selected_image=parsed["selected_image"].strip(),
-            reason=parsed["reason"].strip(),
+            selected_image=selected_image,
+            reason=reason,
+            selected_url=selected_url,
+            source="ai",
+            model=self.model,
         )
-        available_names = {path.name for path in image_paths}
-        if selection.selected_image not in available_names:
-            raise ValueError(f"Selected image is not in local candidates: {selection.selected_image}")
+        matched_candidate = candidates_by_name[selection.selected_image]
+        if selection.selected_url != matched_candidate.public_url:
+            raise ValueError(f"Selected image and URL do not match the same candidate: {selection.selected_image}")
         return selection
 
     def load_prompt(self, path: Path | None = None) -> str:

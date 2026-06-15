@@ -5,7 +5,6 @@ Summary: Scrape public Facebook page posts, redact with OpenRouter, and publish 
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: httpx>=0.27.0
-Requires-Dist: playwright>=1.54.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: python-slugify>=8.0.4
@@ -17,7 +16,20 @@ Requires-Dist: respx>=0.21.1; extra == "dev"
 
 # fbpost-to-wordpress
 
-CLI Python untuk mengambil posting dari public Facebook page, merapikannya dengan OpenRouter, lalu mengirimnya ke WordPress sebagai `draft`.
+CLI Python untuk:
+- mengambil post dari public Facebook page lewat Apify
+- merapikan konten dengan OpenRouter
+- mengirimnya ke WordPress sebagai `draft`
+
+Saat publish ke WordPress:
+- post dibuat sebagai `draft`
+- kategori post di-set ke `Berita`
+- tanggal post mengikuti tanggal Facebook dalam timezone `Asia/Jakarta`
+- semua gambar post ditambahkan di bagian akhir artikel sebagai galeri Gutenberg
+- semua gambar di-upload ke WordPress dulu, lalu AI memilih featured image dari daftar `public URL`
+- hasil pilihan featured image disimpan ke `featured-image.json`
+
+Post yang dibuat aplikasi juga diberi identitas kuat internal di konten WordPress. Saat rerun, aplikasi hanya mengenali post WordPress yang punya identitas ini. Post lama lain tanpa identitas tersebut diabaikan dan tidak dianggap duplikat.
 
 ## Setup
 
@@ -25,33 +37,175 @@ CLI Python untuk mengambil posting dari public Facebook page, merapikannya denga
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e .[dev]
-python -m playwright install chromium
 Copy-Item .env.example .env
 ```
 
-## Konfigurasi `.env`
+## Konfigurasi
 
-Isi file `.env` dengan:
+Isi `.env` dengan nilai berikut.
 
+Wajib:
+- `APIFY_TOKEN`
+
+Opsional berpasangan:
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_MODEL`
+
+Opsional bertiga:
 - `WP_BASE_URL`
 - `WP_USERNAME`
 - `WP_APP_PASSWORD`
 
+Opsional tambahan:
+- `APIFY_ACTOR_ID`
+  Default: `apify/facebook-posts-scraper`
+- `OUTPUT_DIR`
+  Default: `output`
+
+Perilaku konfigurasi:
+- jika `OPENROUTER_*` tidak diisi lengkap, aplikasi hanya `scrape` tanpa `refine`
+- jika `WP_*` tidak diisi lengkap, aplikasi tidak mengirim post ke WordPress
+- `APIFY_TOKEN` wajib diisi agar aplikasi bisa mengambil post dari Facebook
+- `OPENROUTER_*` harus dua-duanya terisi atau dua-duanya kosong
+- `WP_*` harus semuanya terisi atau semuanya kosong
+
+Contoh `.env` minimal:
+
+```env
+APIFY_TOKEN=your-apify-token
+OPENROUTER_API_KEY=your-openrouter-api-key
+OPENROUTER_MODEL=google/gemma-4-31b-it:free
+WP_BASE_URL=https://example.com
+WP_USERNAME=wordpress-user
+WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
+```
+
+Catatan:
+- `WP_APP_PASSWORD` boleh ditempel dengan spasi seperti format dari WordPress. Aplikasi akan menormalkannya otomatis.
+- prompt refine konten bisa diedit di [prompt-content-refine.md](/D:/python/fbpost-to-wordpress/prompt-content-refine.md)
+- prompt pemilihan featured image bisa diedit di [prompt-featured-image.md](/D:/python/fbpost-to-wordpress/prompt-featured-image.md)
+
+## Cara Kerja
+
+Mode normal:
+1. discover post dari Facebook page
+2. scrape teks dan gambar
+3. refine konten jika OpenRouter tersedia
+4. publish ke WordPress jika konfigurasi WordPress tersedia
+
+Mode satu-folder:
+- aplikasi memproses ulang satu folder post lokal yang sudah ada
+- bisa dipakai untuk retry publish atau force stage tertentu
+
+## Struktur Output
+
+Setiap post disimpan ke:
+
+```text
+output\yyyy-mm-dd-fbpostid\
+```
+
+Isi folder biasanya:
+- `content.md`
+- `content-redacted.md`
+- `metadata.md`
+- `status.json`
+- `featured-image.json`
+- `images\`
+
 ## Menjalankan Aplikasi
 
-Jalankan mode normal:
+### Mode Normal
+
+Interaktif:
 
 ```powershell
 python main.py
 ```
 
-Jalankan `dry-run` tanpa kirim ke WordPress:
+Dengan argumen:
 
 ```powershell
-python main.py --dry-run
+python main.py --page-url "https://example.com" --count 1 --skip 0
 ```
+
+Dry-run:
+
+```powershell
+python main.py --dry-run --page-url "https://example.com" --count 1 --skip 0
+```
+
+Perilaku `--dry-run`:
+- tetap scrape
+- tetap refine jika OpenRouter tersedia
+- tidak publish ke WordPress
+
+Default input mode normal:
+- `count = 1`
+- `skip = 0`
+
+### Mode Satu Folder
+
+Proses ulang satu folder post lokal:
+
+```powershell
+python main.py --post-folder output\2026-06-09-1302962048590463
+```
+
+Force satu folder post lokal untuk lanjut dari stage tertentu:
+
+```powershell
+python main.py --post-folder output\2026-06-09-1302962048590463 --force-stage redacted
+```
+
+Nilai `--force-stage` yang didukung:
+- `discovered`
+- `scraped`
+- `redacted`
+
+Arti `--force-stage`:
+- `discovered` -> ulang dari scrape
+- `scraped` -> ulang dari refine
+- `redacted` -> ulang dari publish
+
+## Argumen CLI
+
+- `--dry-run`
+  Menjalankan scrape dan refine, tetapi skip publish ke WordPress.
+
+- `--page-url <url>`
+  URL public Facebook page yang akan diproses.
+
+- `--count <int>`
+  Jumlah post yang akan diambil.
+  Default interaktif: `1`
+  Harus lebih besar dari `0`.
+
+- `--skip <int>`
+  Jumlah post terbaru yang akan dilewati.
+  Default interaktif: `0`
+  Harus `0` atau lebih.
+
+- `--post-folder <path>`
+  Memproses satu folder post lokal yang sudah ada, tanpa discovery dari Facebook.
+
+- `--force-stage <stage>`
+  Memaksa satu folder post lokal untuk lanjut dari stage tertentu.
+  Hanya valid jika `--post-folder` dipakai.
+
+Constraint penting:
+- `--force-stage` wajib disertai `--post-folder`
+- `--post-folder` tidak boleh digabung dengan `--page-url`
+- `--post-folder` tidak boleh digabung dengan `--count`
+- `--post-folder` tidak boleh digabung dengan `--skip`
+
+## Resume dan Idempotency
+
+Perilaku rerun:
+- jika stage lokal masih parsial, aplikasi melanjutkan dari stage yang sesuai
+- jika post WordPress dengan identitas kuat yang sama sudah ada sebagai `draft`, aplikasi akan update draft itu
+- jika post WordPress dengan identitas kuat yang sama sudah `published`, aplikasi akan skip
+- post WordPress lama tanpa identitas kuat diabaikan total
 
 ## Menjalankan Test
 

@@ -43,6 +43,15 @@ class RedactedContent:
 class FeaturedImageSelection:
     selected_image: str
     reason: str
+    selected_url: str | None = None
+    source: str | None = None
+    model: str | None = None
+
+
+@dataclass(slots=True)
+class FeaturedImageCandidate:
+    filename: str
+    public_url: str
 
 
 @dataclass(slots=True)

@@ -65,14 +65,27 @@ class PostStorage:
 
     def write_featured_image_selection(self, record: PostRecord, selection: FeaturedImageSelection) -> None:
         path = record.folder / "featured-image.json"
-        path.write_text(json.dumps(asdict(selection), indent=2), encoding="utf-8")
+        payload = {
+            key: value
+            for key, value in asdict(selection).items()
+            if value is not None
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def read_featured_image_selection(self, folder: Path) -> FeaturedImageSelection | None:
         path = folder / "featured-image.json"
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return FeaturedImageSelection(**data)
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid featured image selection file: {path}")
+        return FeaturedImageSelection(
+            selected_image=str(data["selected_image"]),
+            reason=str(data["reason"]),
+            selected_url=str(data["selected_url"]) if data.get("selected_url") is not None else None,
+            source=str(data["source"]) if data.get("source") is not None else None,
+            model=str(data["model"]) if data.get("model") is not None else None,
+        )
 
     def read_status(self, folder: Path) -> StatusState:
         path = folder / "status.json"
