@@ -3,10 +3,10 @@
 CLI Python untuk:
 - mengambil post dari public Facebook page lewat Apify
 - merapikan konten dengan OpenRouter
-- mengirimnya ke WordPress sebagai `draft`
+- mengirimnya ke WordPress dengan status yang bisa diatur lewat env, default `draft`
 
 Saat publish ke WordPress:
-- post dibuat sebagai `draft`
+- status post mengikuti `WP_CREATE_POST_STATUS` dan `WP_UPDATE_POST_STATUS`
 - kategori post di-set ke `Berita`
 - tanggal post mengikuti tanggal Facebook dalam timezone `Asia/Jakarta`
 - semua gambar post ditambahkan di bagian akhir artikel sebagai galeri Gutenberg
@@ -40,15 +40,26 @@ Opsional bertiga:
 - `WP_USERNAME`
 - `WP_APP_PASSWORD`
 
+Opsional status WordPress:
+- `WP_CREATE_POST_STATUS`
+- `WP_UPDATE_POST_STATUS`
+
 Opsional tambahan:
 - `APIFY_ACTOR_ID`
   Default: `apify/facebook-posts-scraper`
 - `OUTPUT_DIR`
   Default: `output`
+- `SCHEDULED_FB_PAGE_URL`
+- `SCHEDULED_COUNT`
+- `SCHEDULED_SKIP`
+- `SCHEDULED_NTFY_TOPIC`
+- `SCHEDULED_NTFY_SERVER_URL`
+- `SCHEDULED_NTFY_TOKEN`
 
 Perilaku konfigurasi:
 - jika `OPENROUTER_*` tidak diisi lengkap, aplikasi hanya `scrape` tanpa `refine`
 - jika `WP_*` tidak diisi lengkap, aplikasi tidak mengirim post ke WordPress
+- jika `WP_CREATE_POST_STATUS` atau `WP_UPDATE_POST_STATUS` tidak diisi atau kosong, nilainya default ke `draft`
 - `APIFY_TOKEN` wajib diisi agar aplikasi bisa mengambil post dari Facebook
 - `OPENROUTER_*` harus dua-duanya terisi atau dua-duanya kosong
 - `WP_*` harus semuanya terisi atau semuanya kosong
@@ -62,6 +73,18 @@ OPENROUTER_MODEL=google/gemma-4-31b-it:free
 WP_BASE_URL=https://example.com
 WP_USERNAME=wordpress-user
 WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
+WP_CREATE_POST_STATUS=draft
+WP_UPDATE_POST_STATUS=draft
+```
+
+Contoh `.env` untuk scheduled:
+
+```env
+SCHEDULED_FB_PAGE_URL=https://www.facebook.com/...
+SCHEDULED_COUNT=1
+SCHEDULED_SKIP=0
+SCHEDULED_NTFY_SERVER_URL=https://ntfy.sh
+SCHEDULED_NTFY_TOPIC=nama-topik-unik
 ```
 
 Catatan:
@@ -182,6 +205,26 @@ Constraint penting:
 - `--post-folder` tidak boleh digabung dengan `--page-url`
 - `--post-folder` tidak boleh digabung dengan `--count`
 - `--post-folder` tidak boleh digabung dengan `--skip`
+
+### Mode Scheduled
+
+Jalankan runner khusus automation:
+
+```powershell
+python -m fbpost_to_wordpress.scheduled
+```
+
+Contoh `cron` untuk jam 06:00 dan 18:00:
+
+```cron
+CRON_TZ=Asia/Jakarta
+0 6,18 * * * cd /root/fbpage-to-wordpress && /root/fbpage-to-wordpress/.venv/bin/python -m fbpost_to_wordpress.scheduled >> /root/fbpage-to-wordpress/output/scheduled.log 2>&1
+```
+
+Notifikasi Android:
+- install aplikasi `ntfy` di Android dari Google Play, F-Droid, atau GitHub releases
+- subscribe ke topic yang sama dengan `SCHEDULED_NTFY_TOPIC`
+- setiap job selesai, server akan mengirim notifikasi ke topic tersebut
 
 ## Resume dan Idempotency
 

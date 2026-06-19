@@ -62,7 +62,13 @@ def main() -> int:
         else None
     )
     wordpress_client = (
-        WordPressClient(str(config.wp_base_url), config.wp_username, config.wp_app_password)
+        WordPressClient(
+            str(config.wp_base_url),
+            config.wp_username,
+            config.wp_app_password,
+            create_post_status=config.wp_create_post_status,
+            update_post_status=config.wp_update_post_status,
+        )
         if config.can_publish
         else None
     )

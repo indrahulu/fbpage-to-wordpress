@@ -339,6 +339,22 @@ def test_pipeline_updates_existing_wordpress_draft_with_same_source_id(workdir: 
     assert wordpress.updated_source_ids == ["123"]
 
 
+def test_pipeline_updates_existing_wordpress_private_with_same_source_id(workdir: Path) -> None:
+    storage = PostStorage(workdir)
+    wordpress = FakeWordPress()
+    wordpress.find_result = WordPressPostRef(id=555, status="private")
+    pipeline = PostPipeline(storage, FakeScraper(), FakeOpenRouter(), wordpress)
+    pipeline.run("https://facebook.com/page", count=1, skip=0, dry_run=False)
+
+    folder = next(workdir.iterdir())
+    status = json.loads((folder / "status.json").read_text(encoding="utf-8"))
+    assert status["stage"] == "published"
+    assert status["wordpress_post_id"] == 555
+    assert wordpress.post_creates == 0
+    assert wordpress.post_updates == 1
+    assert wordpress.updated_source_ids == ["123"]
+
+
 def test_pipeline_skips_existing_published_wordpress_post_with_same_source_id(workdir: Path) -> None:
     storage = PostStorage(workdir)
     wordpress = FakeWordPress()

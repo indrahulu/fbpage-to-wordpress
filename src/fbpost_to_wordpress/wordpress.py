@@ -16,6 +16,7 @@ from fbpost_to_wordpress.utils import ensure_utc
 
 
 JAKARTA_TZ = timezone(timedelta(hours=7), name="Asia/Jakarta")
+WORDPRESS_POST_STATUSES = {"draft", "future", "pending", "private", "publish"}
 _HASHTAG_ONLY_TOKEN_RE = re.compile(r"#[^\s#]+")
 _CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 _STRONG_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -24,12 +25,21 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 class WordPressClient:
-    def __init__(self, base_url: str, username: str, app_password: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        username: str,
+        app_password: str,
+        create_post_status: str = "draft",
+        update_post_status: str = "draft",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         normalized_username = username.strip()
         normalized_password = "".join(app_password.split())
         token = base64.b64encode(f"{normalized_username}:{normalized_password}".encode("utf-8")).decode("ascii")
         self.headers = {"Authorization": f"Basic {token}"}
+        self.create_post_status = self._normalize_post_status(create_post_status)
+        self.update_post_status = self._normalize_post_status(update_post_status)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def upload_media(self, image_path: Path) -> WordPressMedia:
@@ -60,7 +70,7 @@ class WordPressClient:
         payload = {
             "title": content.title,
             "content": self._build_html_content(content.body, media_items, source_post_id, source_post_url),
-            "status": "draft",
+            "status": self.create_post_status,
             "categories": [self._ensure_category("Berita")],
         }
         if published_at is not None:
@@ -91,7 +101,7 @@ class WordPressClient:
         payload = {
             "title": content.title,
             "content": self._build_html_content(content.body, media_items, source_post_id, source_post_url),
-            "status": "draft",
+            "status": self.update_post_status,
             "categories": [self._ensure_category("Berita")],
         }
         if published_at is not None:
@@ -110,7 +120,7 @@ class WordPressClient:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def find_post_by_source_id(self, source_post_id: str) -> WordPressPostRef | None:
         with httpx.Client(timeout=90) as client:
-            for status in ("draft", "publish"):
+            for status in ("draft", "future", "pending", "private", "publish"):
                 page = 1
                 while True:
                     response = client.get(
@@ -261,6 +271,15 @@ class WordPressClient:
             "source_post_url": source_post_url,
         }
         return f"<!-- fbpost-to-wordpress:{json.dumps(payload, separators=(',', ':'))} -->"
+
+    def _normalize_post_status(self, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            return "draft"
+        if normalized not in WORDPRESS_POST_STATUSES:
+            allowed = ", ".join(sorted(WORDPRESS_POST_STATUSES))
+            raise ValueError(f"WordPress post status must be one of: {allowed}")
+        return normalized
 
     def _extract_source_marker(self, raw_content: str) -> dict[str, str] | None:
         prefix = "<!-- fbpost-to-wordpress:"

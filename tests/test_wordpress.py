@@ -89,6 +89,27 @@ def test_wordpress_create_post_sends_title_body_and_featured_media() -> None:
 
 
 @respx.mock
+def test_wordpress_create_post_uses_configured_status() -> None:
+    respx.get("https://example.com/wp-json/wp/v2/categories").mock(
+        return_value=httpx.Response(200, json=[{"id": 12, "name": "Berita", "slug": "berita"}])
+    )
+    route = respx.post("https://example.com/wp-json/wp/v2/posts").mock(
+        return_value=httpx.Response(201, json={"id": 322})
+    )
+    client = WordPressClient("https://example.com", "admin", "secret", create_post_status="publish")
+
+    client.create_post(
+        RedactedContent(title="Judul", body="Isi", raw_markdown="# Judul\n\nIsi"),
+        media_items=[],
+        source_post_id="123",
+        source_post_url="https://facebook.com/posts/123",
+    )
+
+    payload = route.calls[0].request.read().decode("utf-8")
+    assert '"status":"publish"' in payload
+
+
+@respx.mock
 def test_wordpress_create_post_preserves_mid_article_hashtags_but_removes_trailing_ones() -> None:
     respx.get("https://example.com/wp-json/wp/v2/categories").mock(
         return_value=httpx.Response(200, json=[{"id": 12, "name": "Berita", "slug": "berita"}])
@@ -186,3 +207,24 @@ def test_wordpress_update_post_uses_existing_post_endpoint() -> None:
     assert route.called
     payload = route.calls[0].request.read().decode("utf-8")
     assert "<!-- wp:paragraph -->" in payload
+
+
+@respx.mock
+def test_wordpress_update_post_uses_configured_status() -> None:
+    respx.get("https://example.com/wp-json/wp/v2/categories").mock(
+        return_value=httpx.Response(200, json=[{"id": 12, "name": "Berita", "slug": "berita"}])
+    )
+    route = respx.post("https://example.com/wp-json/wp/v2/posts/321").mock(
+        return_value=httpx.Response(200, json={"id": 321})
+    )
+    client = WordPressClient("https://example.com", "admin", "secret", update_post_status="private")
+    client.update_post(
+        321,
+        RedactedContent(title="Judul", body="Isi", raw_markdown="# Judul\n\nIsi"),
+        media_items=[WordPressMedia(id=88, source_url="https://example.com/uploads/image-1.jpg")],
+        source_post_id="123",
+        source_post_url="https://facebook.com/posts/123",
+    )
+
+    payload = route.calls[0].request.read().decode("utf-8")
+    assert '"status":"private"' in payload

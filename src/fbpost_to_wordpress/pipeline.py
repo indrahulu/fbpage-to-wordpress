@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
@@ -11,6 +12,16 @@ from fbpost_to_wordpress.openrouter import OpenRouterClient
 from fbpost_to_wordpress.storage import PostStorage
 from fbpost_to_wordpress.utils import parse_redacted_markdown
 from fbpost_to_wordpress.wordpress import WordPressClient
+
+
+@dataclass(slots=True)
+class PipelineRunSummary:
+    discovered_posts: int
+    failed_posts: int
+
+    @property
+    def succeeded_posts(self) -> int:
+        return self.discovered_posts - self.failed_posts
 
 
 class PostPipeline:
@@ -28,14 +39,15 @@ class PostPipeline:
         self.wordpress_client = wordpress_client
         self.console = console or Console()
 
-    def run(self, page_url: str, count: int, skip: int, dry_run: bool) -> None:
+    def run(self, page_url: str, count: int, skip: int, dry_run: bool) -> PipelineRunSummary:
         self.console.print(f"[cyan]Discovering posts from {page_url} (count={count}, skip={skip})[/cyan]")
         discovered_posts = self.scraper.discover_posts(page_url=page_url, count=count, skip=skip)
+        summary = PipelineRunSummary(discovered_posts=len(discovered_posts), failed_posts=0)
         if not discovered_posts:
             self.console.print(
                 f"[yellow]No posts available for requested skip={skip}, count={count}. Nothing to process.[/yellow]"
             )
-            return
+            return summary
         if len(discovered_posts) < count:
             self.console.print(
                 f"[yellow]Only {len(discovered_posts)} post(s) available after skip={skip}; requested {count}.[/yellow]"
@@ -43,7 +55,9 @@ class PostPipeline:
         self.console.print(f"[cyan]Discovered {len(discovered_posts)} post(s) to process[/cyan]")
         for index, discovered in enumerate(discovered_posts, start=1):
             self.console.print(f"[cyan]Processing post {index}/{len(discovered_posts)}: {discovered.post_id}[/cyan]")
-            self.process_post(discovered, dry_run=dry_run)
+            if not self.process_post(discovered, dry_run=dry_run):
+                summary.failed_posts += 1
+        return summary
 
     def run_post_folder(self, folder: Path, dry_run: bool, force_stage: Stage | None = None) -> None:
         record = self.storage.read_record(folder)
@@ -61,7 +75,7 @@ class PostPipeline:
             self.console.print(f"[cyan]Resuming {record.post_id} from stage: {resume_stage.value}[/cyan]")
         self.process_post(discovered, dry_run=dry_run)
 
-    def process_post(self, discovered: DiscoveredPost, dry_run: bool) -> None:
+    def process_post(self, discovered: DiscoveredPost, dry_run: bool) -> bool:
         record = self.storage.build_record(discovered)
         self.storage.initialize(record, dry_run=dry_run)
         stage = self.storage.infer_resume_stage(record.folder)
@@ -74,7 +88,7 @@ class PostPipeline:
             if stage is Stage.SCRAPED:
                 if self.openrouter_client is None:
                     self.console.print(f"[yellow]Skipping refine for {discovered.post_id}: OpenRouter config is incomplete[/yellow]")
-                    return
+                    return True
                 self.console.print(f"[blue]Refining content for {discovered.post_id}[/blue]")
                 self._redact_stage(record.folder, dry_run=dry_run)
                 stage = Stage.REDACTED
@@ -82,17 +96,19 @@ class PostPipeline:
                 redacted_markdown = (record.folder / "content-redacted.md").read_text(encoding="utf-8")
                 self.storage.write_publish_preview(record, redacted_markdown)
                 self.console.print(f"[yellow]Dry-run: skipping publish for {discovered.post_id}[/yellow]")
-                return
+                return True
             if stage is Stage.REDACTED:
                 if self.wordpress_client is None:
                     self.console.print(f"[yellow]Skipping publish for {discovered.post_id}: WordPress config is incomplete[/yellow]")
-                    return
+                    return True
                 self.console.print(f"[blue]Publishing {discovered.post_id} to WordPress[/blue]")
                 self._publish_stage(record.folder, dry_run=dry_run, published_at=record.published_at)
-                self.console.print(f"[green]Published {discovered.post_id} to WordPress as draft[/green]")
+                self.console.print(f"[green]Published {discovered.post_id} to WordPress[/green]")
+            return True
         except Exception as exc:
             self.storage.write_status(record.folder, Stage.FAILED, dry_run=dry_run, last_error=str(exc))
             self.console.print(f"[red]Failed {discovered.post_id}: {exc}[/red]")
+            return False
 
     def _scrape_stage(self, discovered: DiscoveredPost, folder: Path, dry_run: bool) -> None:
         scraped = self.scraper.scrape_post(discovered)
@@ -139,8 +155,10 @@ class PostPipeline:
         featured_media_id = media_map.get(featured_image_name).id if featured_image_name and featured_image_name in media_map else None
         if featured_media_id is not None:
             self.console.print(f"[blue]Using {featured_image_name} as featured image[/blue]")
-        if existing_post is not None and existing_post.status == "draft":
-            self.console.print(f"[blue]Updating existing WordPress draft #{existing_post.id} for {record.post_id}[/blue]")
+        if existing_post is not None:
+            self.console.print(
+                f"[blue]Updating existing WordPress {existing_post.status} #{existing_post.id} for {record.post_id}[/blue]"
+            )
             post_id = self.wordpress_client.update_post(
                 existing_post.id,
                 redacted,
